@@ -1,0 +1,385 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Work with us",
+        "formDescription": "Tell us about your project and we'll get back to you.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Company"
+            },
+            {
+              "fieldLabel": "Budget",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Under $1,000"
+                  },
+                  {
+                    "option": "$1,000 - $5,000"
+                  },
+                  {
+                    "option": "$5,000 - $20,000"
+                  },
+                  {
+                    "option": "$20,000+"
+                  },
+                  {
+                    "option": "Not sure yet"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Message",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c8a78b5-b937-4bd7-bad4-39307291daa7",
+      "name": "Lead Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -1120,
+        80
+      ],
+      "webhookId": "8292ff04-7600-439b-9d9f-0eb1eef2d047"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-1",
+              "name": "scoreThreshold",
+              "value": 8,
+              "type": "number"
+            },
+            {
+              "id": "cfg-2",
+              "name": "model",
+              "value": "openai/gpt-oss-120b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "23e9ac69-0d13-4cb7-bbd7-3103cbbd1368",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -896,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $json.model }}\",\n  \"temperature\": 0.2,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n\"content\": \"You are a B2B lead qualification assistant for a software development studio. Score each inbound lead from 0 to 10 on how likely it is to become a paying client. Consider budget, clarity of the request, whether it matches software/automation work, and signs of spam. Return ONLY a JSON object with exactly these keys: score (number 0-10), category (one of hot, warm, cold, or spam), reasoning (one short sentence), and suggested_reply (a friendly two-sentence first reply addressed to the lead by first name). No markdown, no code fences, no text outside the JSON object.\nScore primarily on how specific and actionable the described\nneed is, and how well it fits software, automation, or AI work.\nThe stated budget is a secondary signal.\n\nIf the message does not describe a concrete problem or project,\nThe score must not exceed 5, regardless of the stated budget.\n\nAcademic, research, and interview requests are cold (2 or below)\nhowever professionally written.\n\nOffers of equity, revenue share, or exposure in place of payment\ncap the score at 3.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"Name: \" + $json.Name + \" | Email: \" + $json.Email + \" | Company: \" + ($json.Company || \"not given\") + \" | Budget: \" + ($json.Budget || \"not given\") + \" | Message: \" + $json.Message) }}\n    }\n  ]\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "7ec297c2-df09-4524-a765-596f96824ae7",
+      "name": "Qualify Lead (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -672,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (let i = 0; i < $input.all().length; i++) {\n  const item = $input.all()[i];\n  const lead = $('Set Config').all()[i].json;\n\n  const raw = item.json?.choices?.[0]?.message?.content ?? '';\n\n  let parsed = null;\n  let parseOk = true;\n  let parseError = '';\n\n  try {\n    if (!raw) throw new Error('Empty response from model');\n    const cleaned = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();\n    parsed = JSON.parse(cleaned);\n    if (typeof parsed.score !== 'number') throw new Error('score missing or not a number');\n    if (!parsed.category) throw new Error('category missing');\n    if (parsed.score < 0 || parsed.score > 10) throw new Error('score out of range');\n  } catch (e) {\n    parseOk = false;\n    parseError = e.message;\n  }\n\n  out.push({\n    json: {\n      receivedAt: new Date().toISOString(),\n      name: lead.Name ?? '',\n      email: lead.Email ?? '',\n      company: lead.Company ?? '',\n      budget: lead.Budget ?? '',\n      message: lead.Message ?? '',\n      scoreThreshold: lead.scoreThreshold ?? 7,\n      parseOk,\n      parseError,\n      score: parsed?.score ?? null,\n      category: parsed?.category ?? null,\n      reasoning: parsed?.reasoning ?? null,\n      suggestedReply: parsed?.suggested_reply ?? null,\n      rawModelOutput: raw\n    }\n  });\n}\n\nreturn out;"
+      },
+      "id": "254f25ac-82e9-4119-8fa4-4130954c5db6",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-parse-ok",
+              "leftValue": "={{ $json.parseOk }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "006675d6-eac3-4f77-ab74-abe863c7aa9c",
+      "name": "Parsed OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "15iPsBa-HmLIeedTbGsIYweXSVaC8MeCctlNj0R5SXzE",
+          "mode": "list",
+          "cachedResultName": "n8n leads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15iPsBa-HmLIeedTbGsIYweXSVaC8MeCctlNj0R5SXzE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "id"
+        }
+      },
+      "id": "0a1f7b1d-e615-4d19-aa4f-baa293d818ca",
+      "name": "Log Lead to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        16,
+        -48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "iTVfYm9VYh63avOb",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-hot",
+              "leftValue": "={{ $json.score }}",
+              "rightValue": "={{ $json.scoreThreshold }}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5caf077b-ad30-4925-bfa0-c39d25f46080",
+      "name": "Hot Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "text": "=:fire: *Hot lead — {{ $json.score }}/10* ({{ $json.category }})\n*{{ $json.name }}* at {{ $json.company || 'no company given' }} — {{ $json.email }}\nBudget: {{ $json.budget }}\nWhy: {{ $json.reasoning }}\n\n*Suggested reply:*\n{{ $json.suggestedReply }}",
+        "otherOptions": {}
+      },
+      "id": "f04090bb-2d15-457d-a529-2d2493bd806a",
+      "name": "Notify Hot Lead",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        -144
+      ],
+      "webhookId": "e83986fa-6850-4866-bbf1-bbff88f01d24"
+    },
+    {
+      "parameters": {},
+      "id": "9947e8dc-068a-4ae6-9af0-d5b518be68fd",
+      "name": "Logged Only (No Alert)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        448,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "id"
+        },
+        "text": "=:warning: *Lead qualification failed*\nLead: {{ $json.name }} — {{ $json.email }}\nError: {{ $json.parseError }}\nRaw model output: {{ $json.rawModelOutput }}",
+        "otherOptions": {}
+      },
+      "id": "9c19ffaa-6ce8-41b0-a595-9a1566636250",
+      "name": "Notify Parse Failure",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        16,
+        224
+      ],
+      "webhookId": "30c72409-35a3-4a1f-8016-c4abc9cb4f6d",
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Lead Form": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Qualify Lead (Groq)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify Lead (Groq)": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Parsed OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsed OK?": {
+      "main": [
+        [
+          {
+            "node": "Log Lead to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Parse Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Lead to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Hot Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot Lead?": {
+      "main": [
+        [
+          {
+            "node": "Notify Hot Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Logged Only (No Alert)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6ecc8a460f667688b86726cda724baf12e6308a52d5b97a4e768261db8e5e804"
+  }
+}
